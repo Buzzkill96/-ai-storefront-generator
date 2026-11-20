@@ -12,9 +12,10 @@ Built for the SuperProfile PM take-home assignment.
 
 ## How the AI part works
 
-- **Model:** Google Gemini (`gemini-3.8-flash`, with `gemini-3.5-flash-lite` as fallback; set by environment variables so a retired model can be swapped without a code change), called with a strict JSON response schema (`lib/prompts.ts`).
+- **Models (a chain across two providers):** Google Gemini (`gemini-3.8-flash`, minimal "thinking" for speed) → Groq (`llama-3.3-70b-versatile`, if `GROQ_API_KEY` is set) → Gemini fallback (`gemini-3.5-flash-lite`). If Google's free tier is overloaded, the next attempt goes to a different provider instead of waiting. Every model name is an environment variable, so a retired model can be swapped without a code change.
+- **Structured output:** Gemini gets a strict JSON response schema (`lib/prompts.ts`). Groq gets JSON mode plus the same schema in its instructions.
 - **Validation:** every response is checked with Zod (`lib/types.ts`, `lib/build-store.ts`). Missing fields, fewer than 2 products, or an empty bio count as failures.
-- **Retries:** if validation fails, the same model retries once with feedback about what was wrong. If the model is briefly overloaded (503), it retries up to twice with growing pauses (2 s, 4 s). A timeout (25 s), rate limit or retired model moves on to the next fallback model. If that fails too, the creator sees a friendly message and keeps their input (`lib/llm.ts`).
+- **Retries:** an answer that fails validation is retried once on the same model, with feedback about what was wrong. An overload, timeout (15 s), rate limit or retired model moves straight to the next model in the chain. If every model fails, the creator sees a friendly message and keeps their input (`lib/llm.ts`).
 - **Guardrails in code** (`lib/guardrails.ts`): prices are clamped to a sane INR range per format and snapped to familiar price points (₹199, ₹499, ₹999…), duplicate products are dropped, and text is trimmed.
 - **Messy input:**
   - Empty input, an invalid handle or keyboard-mash text is caught before any AI call.
@@ -44,6 +45,8 @@ npm test                     # guardrail unit tests
 |---|---|---|
 | `GEMINI_API_KEY` | Yes | Free from https://aistudio.google.com |
 | `GEMINI_MODEL` | No | Default `gemini-3.8-flash` |
+| `GROQ_API_KEY` | Recommended | Free from https://console.groq.com (no card). Adds a second provider as backup |
+| `GROQ_MODEL` | No | Default `llama-3.3-70b-versatile` |
 | `GEMINI_FALLBACK_MODEL` | No | Default `gemini-3.5-flash-lite`. Several models can be listed, separated by commas |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | No | Or `KV_REST_API_URL` / `KV_REST_API_TOKEN`, which Vercel adds automatically when you connect Upstash |
 
