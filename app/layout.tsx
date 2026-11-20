@@ -4,6 +4,12 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "AI Storefront Generator",
   description: "Turn what you know into a ready-to-share creator store in about two minutes.",
+  openGraph: {
+    title: "AI Storefront Generator",
+    description: "Turn what you know into a ready-to-share creator store in about two minutes.",
+    type: "website",
+  },
+  twitter: { card: "summary_large_image" },
 };
 
 export const viewport: Viewport = {

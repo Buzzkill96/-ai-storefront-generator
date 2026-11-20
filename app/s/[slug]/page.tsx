@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { StoreNotFound } from "@/components/NotFound";
+import { notFound } from "next/navigation";
 import { StorePage } from "@/components/StorePage";
 import { getRecord } from "@/lib/storage";
 
@@ -14,13 +14,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title: `${rec.store.name} — Store`,
     description: rec.store.tagline,
-    openGraph: { title: rec.store.name, description: rec.store.tagline },
+    openGraph: { title: rec.store.name, description: rec.store.tagline, type: "website", url: `/s/${slug}` },
+    alternates: { canonical: `/s/${slug}` },
   };
 }
 
 export default async function PublishedStore({ params }: Props) {
   const { slug } = await params;
   const rec = await getRecord(slug);
-  if (!rec) return <StoreNotFound />;
+  if (!rec) notFound();
   return <StorePage store={rec.store} />;
 }

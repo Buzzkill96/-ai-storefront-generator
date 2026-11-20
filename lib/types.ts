@@ -109,6 +109,6 @@ export const AIProfileSchema = z.object({
 // ---- API response shapes ----
 
 export type GenerateResponse =
-  | { status: "ok"; store: Store; assumptions: string[]; meta: { model: string; attempts: number; pricesAdjusted: number } }
+  | { status: "ok"; store: Store; assumptions: string[] }
   | { status: "needs_more_info"; reason: string }
   | { status: "error"; message: string };

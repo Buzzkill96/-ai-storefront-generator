@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { StoreNotFound } from "@/components/NotFound";
+import { notFound } from "next/navigation";
 import { StorePage } from "@/components/StorePage";
 import { decodeStore } from "@/lib/storage";
 
@@ -13,6 +13,6 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
 
 export default async function LinkStore({ searchParams }: Props) {
   const store = decodeStore((await searchParams).d);
-  if (!store) return <StoreNotFound />;
+  if (!store) notFound();
   return <StorePage store={store} />;
 }

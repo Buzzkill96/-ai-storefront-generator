@@ -1,7 +1,7 @@
 import { randomBytes } from "crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { slugify } from "@/lib/guardrails";
+import { normalizeHandle, slugify } from "@/lib/guardrails";
 import { encodeStore, getRecord, hasDatabase, hashKey, saveRecord } from "@/lib/storage";
 import { StoreSchema } from "@/lib/types";
 
@@ -12,15 +12,26 @@ const RequestSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => null);
+  const body = await req.json().catch(() => undefined);
+  if (body === undefined) {
+    return NextResponse.json({ status: "error", message: "We couldn't read that request. Please refresh and try again." }, { status: 400 });
+  }
   const parsed = RequestSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(
-      { status: "error", message: "Some fields are too long or empty. Check your products and try again." },
-      { status: 400 },
-    );
+    const issue = parsed.error.issues[0];
+    const field = String(issue?.path.at(-1) ?? "");
+    const message =
+      field === "price"
+        ? "Prices must be whole rupees between ₹0 and ₹1,00,000."
+        : field === "products"
+          ? "A store needs between 1 and 4 products."
+          : "Some fields are too long or missing. Check your profile and products, then try again.";
+    return NextResponse.json({ status: "error", message }, { status: 400 });
   }
-  const { store, slug: existingSlug, editKey: existingKey } = parsed.data;
+  const { slug: existingSlug, editKey: existingKey } = parsed.data;
+  // The form already blocks invalid Instagram handles; the server enforces the same rule.
+  const handleCheck = normalizeHandle(parsed.data.store.handle);
+  const store = { ...parsed.data.store, handle: handleCheck.valid ? handleCheck.handle : "" };
 
   const missing = store.products.find((p) => !p.title.trim());
   if (!store.name.trim() || missing) {

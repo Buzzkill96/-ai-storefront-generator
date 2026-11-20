@@ -117,6 +117,11 @@ export default function Builder() {
   const [loadingLine, setLoadingLine] = useState(0);
   const [slow, setSlow] = useState(false);
   const loaded = useRef(false);
+  const fromPopState = useRef(false);
+  const storeRef = useRef<Store | null>(null);
+  const publishedRef = useRef<Published | null>(null);
+  storeRef.current = store;
+  publishedRef.current = published;
 
   // Restore a saved draft so a refresh or a dropped connection never loses work.
   useEffect(() => {
@@ -146,6 +151,41 @@ export default function Builder() {
       /* storage full or blocked: not critical */
     }
   }, [input, store, assumptions, published]);
+
+  // Browser/phone Back and Forward move between steps instead of leaving the site.
+  const view = step === "edit" ? (tab === "preview" ? "preview" : "edit") : step;
+  useEffect(() => {
+    if (!loaded.current || view === "loading") return;
+    if (fromPopState.current) {
+      fromPopState.current = false;
+      return;
+    }
+    const current = window.history.state?.sfView;
+    if (current === view) return;
+    if (current === undefined) window.history.replaceState({ ...window.history.state, sfView: view }, "");
+    else window.history.pushState({ ...window.history.state, sfView: view }, "");
+  }, [view]);
+
+  useEffect(() => {
+    function onPopState(e: PopStateEvent) {
+      const v = e.state?.sfView as string | undefined;
+      fromPopState.current = true;
+      if (!v || v === "input" || v === "clarify" || !storeRef.current) {
+        setStep("input");
+      } else if (v === "preview") {
+        setStep("edit");
+        setTab("preview");
+      } else if (v === "published" && publishedRef.current) {
+        setStep("published");
+      } else {
+        setStep("edit");
+        setTab("edit");
+      }
+      window.scrollTo(0, 0);
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   // Rotating loading messages + "taking longer" notice
   useEffect(() => {
@@ -218,11 +258,13 @@ export default function Builder() {
 
   function patchStore(patch: Partial<Store>) {
     setDirty(true);
+    setPublishErrors([]);
     setStore((s) => (s ? { ...s, ...patch } : s));
   }
 
   function patchProduct(id: string, patch: Partial<Product>) {
     setDirty(true);
+    setPublishErrors([]);
     setStore((s) => (s ? { ...s, products: s.products.map((p) => (p.id === id ? { ...p, ...patch } : p)) } : s));
   }
 
@@ -295,10 +337,10 @@ export default function Builder() {
         <h1 className="h1">Help us understand you</h1>
         <p className="sub">{clarifyReason}</p>
 
-        <label className="label">What do you post about?</label>
-        <div className="chips">
+        <div className="label" id="clarify-niche">What do you post about?</div>
+        <div className="chips" role="group" aria-labelledby="clarify-niche">
           {NICHES.map((n) => (
-            <button key={n} className={`chip ${input.niche === n ? "on" : ""}`} onClick={() => setInput({ ...input, niche: input.niche === n ? "" : n })}>
+            <button key={n} aria-pressed={input.niche === n} className={`chip ${input.niche === n ? "on" : ""}`} onClick={() => setInput({ ...input, niche: input.niche === n ? "" : n })}>
               {n}
             </button>
           ))}
@@ -378,15 +420,16 @@ export default function Builder() {
         <div className="topbar">
           <div className="inner">
             <button className="btn link" onClick={() => startOver(true)} style={{ whiteSpace: "nowrap" }}>← Back</button>
-            <div className="seg" role="tablist">
-              <button className={tab === "edit" ? "on" : ""} onClick={() => setTab("edit")}>Edit</button>
-              <button className={tab === "preview" ? "on" : ""} onClick={() => setTab("preview")}>Preview</button>
+            <div className="seg" role="group" aria-label="Edit or preview">
+              <button className={tab === "edit" ? "on" : ""} aria-pressed={tab === "edit"} onClick={() => setTab("edit")}>Edit</button>
+              <button className={tab === "preview" ? "on" : ""} aria-pressed={tab === "preview"} onClick={() => setTab("preview")}>Preview</button>
             </div>
             <span style={{ width: 60 }} />
           </div>
         </div>
 
         <div className="wrap" style={{ paddingTop: 8 }}>
+          <h1 className="sr-only">Edit your store</h1>
           {error && <div className="notice error">{error}</div>}
           {publishErrors.length > 0 && (
             <div className="notice error">
@@ -416,10 +459,11 @@ export default function Builder() {
                   </button>
                 </div>
                 <label className="label">Name</label>
-                <input className="input" value={store.name} maxLength={60} onChange={(e) => patchStore({ name: e.target.value })} />
+                <input className="input" aria-label="Name" value={store.name} maxLength={60} onChange={(e) => patchStore({ name: e.target.value })} />
                 <label className="label">Instagram handle <small>(optional)</small></label>
                 <input
                   className={`input ${normalizeHandle(store.handle).valid ? "" : "bad"}`}
+                  aria-label="Instagram handle"
                   value={store.handle ? "@" + store.handle : ""}
                   maxLength={31}
                   placeholder="@yourhandle"
@@ -427,9 +471,9 @@ export default function Builder() {
                 />
                 {!normalizeHandle(store.handle).valid && <div className="err">This handle has characters Instagram doesn&apos;t allow. It won&apos;t be shown.</div>}
                 <label className="label">Tagline</label>
-                <input className="input" value={store.tagline} maxLength={120} onChange={(e) => patchStore({ tagline: e.target.value })} />
+                <input className="input" aria-label="Tagline" value={store.tagline} maxLength={120} onChange={(e) => patchStore({ tagline: e.target.value })} />
                 <label className="label">Bio</label>
-                <textarea className="textarea" value={store.bio} maxLength={600} onChange={(e) => patchStore({ bio: e.target.value })} />
+                <textarea className="textarea" aria-label="Bio" value={store.bio} maxLength={600} onChange={(e) => patchStore({ bio: e.target.value })} />
                 {partError?.key === "profile" && <div className="err">{partError.message}</div>}
               </section>
 
@@ -440,7 +484,8 @@ export default function Builder() {
                   {THEMES.map((t) => (
                     <button
                       key={t}
-                      aria-label={t}
+                      aria-label={`${t[0].toUpperCase()}${t.slice(1)} colour`}
+                      aria-pressed={store.theme === t}
                       className={`swatch ${store.theme === t ? "on" : ""}`}
                       style={{ background: THEME_COLORS[t] }}
                       onClick={() => patchStore({ theme: t })}
@@ -460,17 +505,17 @@ export default function Builder() {
                         <button className="iconbtn" disabled={!!busy} onClick={() => regenerate({ type: "product", index: i }, key)}>
                           {busy === key ? "Thinking…" : "↻ New idea"}
                         </button>
-                        <button className="iconbtn" disabled={!!busy || store.products.length <= 1} onClick={() => removeProduct(p.id)} aria-label="Remove product">
+                        <button className="iconbtn" disabled={!!busy || store.products.length <= 1} onClick={() => removeProduct(p.id)} aria-label={`Remove product ${i + 1}`}>
                           ✕
                         </button>
                       </div>
                     </div>
                     <label className="label">Title</label>
-                    <textarea className="textarea title-field" rows={2} value={p.title} maxLength={100} onChange={(e) => patchProduct(p.id, { title: e.target.value.replace(/\n/g, " ") })} />
+                    <textarea className="textarea title-field" aria-label={`Product ${i + 1} title`} rows={2} value={p.title} maxLength={100} onChange={(e) => patchProduct(p.id, { title: e.target.value.replace(/\n/g, " ") })} />
                     <div className="row format-price">
                       <div>
                         <label className="label">Format</label>
-                        <select className="select" value={p.format} onChange={(e) => patchProduct(p.id, { format: e.target.value as Product["format"] })}>
+                        <select className="select" aria-label={`Product ${i + 1} format`} value={p.format} onChange={(e) => patchProduct(p.id, { format: e.target.value as Product["format"] })}>
                           {FORMATS.map((f) => <option key={f} value={f}>{FORMAT_LABELS[f]}</option>)}
                         </select>
                       </div>
@@ -481,6 +526,7 @@ export default function Builder() {
                           <input
                             className="input"
                             inputMode="numeric"
+                            aria-label={`Product ${i + 1} price in rupees`}
                             value={String(p.price)}
                             onChange={(e) => {
                               const n = parseInt(e.target.value.replace(/\D/g, "") || "0", 10);
@@ -504,7 +550,7 @@ export default function Builder() {
                       </div>
                     )}
                     <label className="label">Description</label>
-                    <textarea className="textarea" value={p.description} maxLength={800} onChange={(e) => patchProduct(p.id, { description: e.target.value })} />
+                    <textarea className="textarea" aria-label={`Product ${i + 1} description`} value={p.description} maxLength={800} onChange={(e) => patchProduct(p.id, { description: e.target.value })} />
                     {partError?.key === key && <div className="err">{partError.message}</div>}
                   </section>
                 );
@@ -562,7 +608,10 @@ export default function Builder() {
         onChange={(e) => setInput({ ...input, description: e.target.value })}
         placeholder="e.g. I'm a yoga teacher in Jaipur. I post morning routines for working women with back pain."
       />
-      <div className="hint">English, Hindi or Hinglish — whatever is easiest. One line is enough.</div>
+      <div className="hint">
+        English, Hindi or Hinglish — whatever is easiest. One line is enough.
+        {input.description.length > 1000 && <strong> {1200 - input.description.length} characters left.</strong>}
+      </div>
       <div className="chips" style={{ marginTop: 10 }}>
         <span className="hint" style={{ marginTop: 6 }}>Try:</span>
         {EXAMPLES.map((ex) => (
@@ -570,19 +619,19 @@ export default function Builder() {
         ))}
       </div>
 
-      <label className="label">Your niche <small>(optional)</small></label>
-      <div className="chips">
+      <div className="label" id="niche-label">Your niche <small>(optional)</small></div>
+      <div className="chips" role="group" aria-labelledby="niche-label">
         {NICHES.map((n) => (
-          <button key={n} className={`chip ${input.niche === n ? "on" : ""}`} onClick={() => setInput({ ...input, niche: input.niche === n ? "" : n })}>
+          <button key={n} aria-pressed={input.niche === n} className={`chip ${input.niche === n ? "on" : ""}`} onClick={() => setInput({ ...input, niche: input.niche === n ? "" : n })}>
             {n}
           </button>
         ))}
       </div>
 
-      <label className="label">Followers <small>(helps us price right)</small></label>
-      <div className="chips">
+      <div className="label" id="followers-label">Followers <small>(helps us price right)</small></div>
+      <div className="chips" role="group" aria-labelledby="followers-label">
         {AUDIENCES.map((a) => (
-          <button key={a} className={`chip ${input.audience === a ? "on" : ""}`} onClick={() => setInput({ ...input, audience: a })}>
+          <button key={a} aria-pressed={input.audience === a} className={`chip ${input.audience === a ? "on" : ""}`} onClick={() => setInput({ ...input, audience: a })}>
             {AUDIENCE_LABELS[a]}
           </button>
         ))}
@@ -613,10 +662,10 @@ export default function Builder() {
         <div className="hint">We don&apos;t read your Instagram. Your own words above matter more.</div>
       )}
 
-      <label className="label">Language for your page</label>
-      <div className="seg">
-        <button className={input.language === "english" ? "on" : ""} onClick={() => setInput({ ...input, language: "english" })}>English</button>
-        <button className={input.language === "hinglish" ? "on" : ""} onClick={() => setInput({ ...input, language: "hinglish" })}>Hinglish</button>
+      <div className="label" id="lang-label">Language for your page</div>
+      <div className="seg" role="group" aria-labelledby="lang-label">
+        <button aria-pressed={input.language === "english"} className={input.language === "english" ? "on" : ""} onClick={() => setInput({ ...input, language: "english" })}>English</button>
+        <button aria-pressed={input.language === "hinglish"} className={input.language === "hinglish" ? "on" : ""} onClick={() => setInput({ ...input, language: "hinglish" })}>Hinglish</button>
       </div>
 
       <div className="sticky-bottom">
@@ -626,8 +675,8 @@ export default function Builder() {
           </button>
         </div>
       </div>
-      {!canGenerate && input.description.length === 0 && (
-        <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>Write a line about yourself (or add your Instagram handle) to start.</p>
+      {!canGenerate && (
+        <p className="hint" style={{ textAlign: "center", marginTop: 20 }}>Write a few words about yourself (at least 2 letters), or add your Instagram handle, to start.</p>
       )}
     </div>
   );

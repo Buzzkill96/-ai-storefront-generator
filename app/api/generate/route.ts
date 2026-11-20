@@ -12,10 +12,13 @@ function reply(body: GenerateResponse, status = 200) {
 }
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => null);
-  const parsed = CreatorInputSchema.safeParse(body ?? {});
+  const body = await req.json().catch(() => undefined);
+  if (body === undefined || body === null || typeof body !== "object") {
+    return reply({ status: "error", message: "We couldn't read that request. Please refresh and try again." }, 400);
+  }
+  const parsed = CreatorInputSchema.safeParse(body);
   if (!parsed.success) {
-    return reply({ status: "needs_more_info", reason: "Tell us a little about what you do so we can build your store." });
+    return reply({ status: "error", message: "Some details are too long. Please shorten them and try again." }, 400);
   }
   const input = parsed.data;
   const { handle, valid: handleValid } = normalizeHandle(input.handle);
@@ -71,7 +74,6 @@ export async function POST(req: Request) {
       status: "ok",
       store,
       assumptions: data.assumptions.slice(0, 3).map((a) => clip(a, 120)),
-      meta: { model, attempts, pricesAdjusted },
     });
   } catch (err) {
     console.error("[generate] failed", err);
