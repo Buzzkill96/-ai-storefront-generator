@@ -99,7 +99,10 @@ export function slugify(name: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 30)
     .replace(/-+$/g, "");
-  const suffix = Math.random().toString(36).slice(2, 6);
+  // 6 cryptographically random base-36 characters (~2 billion combinations). Publishing also
+  // refuses to overwrite an existing link, so a collision can never replace another store.
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  const suffix = Array.from(bytes, (b) => (b % 36).toString(36)).join("");
   return `${base || "store"}-${suffix}`;
 }
 

@@ -30,8 +30,8 @@ test("instagram handle normalisation", () => {
 });
 
 test("slugs are url-safe", () => {
-  assert.match(slugify("Priya Sharma — Fitness!"), /^priya-sharma-fitness-[a-z0-9]{1,4}$/);
-  assert.match(slugify("😀"), /^store-[a-z0-9]{1,4}$/);
+  assert.match(slugify("Priya Sharma — Fitness!"), /^priya-sharma-fitness-[a-z0-9]{6}$/);
+  assert.match(slugify("😀"), /^store-[a-z0-9]{6}$/);
 });
 
 test("AI output with too few products is rejected so it gets retried", () => {
@@ -55,4 +55,12 @@ test("unsupported claims are flagged only when the creator didn't state them", (
   for (const f of ["postpartum / pregnancy", "safe", "posture correction", "weight-loss results", "certified / qualified"]) assert.ok(flags.includes(f), f);
   assert.deepEqual(findUnsupportedClaims(store, "Certified postpartum trainer: safe workouts, posture, lose 5 kg"), []);
   assert.deepEqual(findUnsupportedClaims({ tagline: "Learn yoga at home", bio: "Gentle beginner flows.", products: [] }, "I teach yoga"), []);
+});
+
+test("two near-identical products are rejected so the AI is asked again", () => {
+  const p = (title: string) => ({ title, format: "ebook", price: 199, priceReason: "Easy first buy.", description: "A helpful guide for beginners who want results." });
+  assert.throws(
+    () => parseGeneration({ inputQuality: "usable", assumptions: [], displayName: "A", tagline: "Hello there", bio: "x".repeat(30), theme: "ocean", products: [p("Yoga Guide"), p("yoga guide!")] }),
+    /clearly different titles/,
+  );
 });

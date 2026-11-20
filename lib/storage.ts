@@ -9,7 +9,7 @@ import { StoreSchema, type Store } from "./types";
 
 type StoredRecord = { store: Store; editKeyHash: string; createdAt: string; updatedAt: string };
 
-function getRedis(): Redis | null {
+export function getRedis(): Redis | null {
   const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
   if (!url || !token) return null;
@@ -42,6 +42,14 @@ export async function saveRecord(slug: string, rec: StoredRecord): Promise<void>
   const redis = getRedis();
   if (!redis) throw new Error("No database configured");
   await redis.set(`store:${slug}`, rec);
+}
+
+/** Saves only if the link is free (atomic). Returns false if the slug is already taken. */
+export async function createRecord(slug: string, rec: StoredRecord): Promise<boolean> {
+  const redis = getRedis();
+  if (!redis) throw new Error("No database configured");
+  const ok = await redis.set(`store:${slug}`, rec, { nx: true });
+  return ok === "OK";
 }
 
 export function encodeStore(store: Store): string {

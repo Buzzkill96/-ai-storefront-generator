@@ -3,6 +3,7 @@ import { z } from "zod";
 import { finalizeProduct, parseProduct, parseProfile } from "@/lib/build-store";
 import { normalizeHandle } from "@/lib/guardrails";
 import { friendlyMessage, generateStructured } from "@/lib/llm";
+import { checkRateLimit, RATE_LIMIT_MESSAGE } from "@/lib/ratelimit";
 import {
   buildProductPrompt,
   buildProfilePrompt,
@@ -32,6 +33,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ status: "error", message: "Something looks off with this store. Please refresh and try again." }, { status: 400 });
   }
   const { input, store, target } = parsed.data;
+  const limit = await checkRateLimit(req, "regenerate");
+  if (!limit.ok) return NextResponse.json({ status: "error", message: RATE_LIMIT_MESSAGE }, { status: 429 });
   const { handle, valid } = normalizeHandle(input.handle);
   const safeHandle = valid ? handle : "";
 

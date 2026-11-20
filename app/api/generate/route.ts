@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { finalizeProducts, parseGeneration } from "@/lib/build-store";
 import { clip, looksLikeGibberish, normalizeHandle } from "@/lib/guardrails";
 import { friendlyMessage, generateStructured } from "@/lib/llm";
+import { checkRateLimit, RATE_LIMIT_MESSAGE } from "@/lib/ratelimit";
 import { buildGeneratePrompt, GENERATION_SCHEMA, SYSTEM_PROMPT } from "@/lib/prompts";
 import { CreatorInputSchema, type GenerateResponse, type Store } from "@/lib/types";
 
@@ -43,7 +44,11 @@ export async function POST(req: Request) {
     });
   }
 
-  // 3) Ask the AI
+  // 3) Per-IP limit before spending an AI call
+  const limit = await checkRateLimit(req, "generate");
+  if (!limit.ok) return reply({ status: "error", message: RATE_LIMIT_MESSAGE }, 429);
+
+  // 4) Ask the AI
   try {
     const { data, model, attempts } = await generateStructured({
       system: SYSTEM_PROMPT,

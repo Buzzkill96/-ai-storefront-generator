@@ -10,7 +10,7 @@ Return JSON that matches the schema exactly.
 
 STEP 1 - JUDGE THE INPUT
 - inputQuality = "unusable" if the text is gibberish or random characters, reveals no skill, topic or niche at all, or asks to sell something you must not help with (illegal goods, adult content, hate, guaranteed investment returns, miracle medical cures). Put one short, friendly sentence addressed to the creator in unusableReason, e.g. "I couldn't tell what you teach or post about." For unusable input return empty strings and an empty products array.
-- Otherwise "usable". Thin input (one word like "fitness", or only an Instagram handle) IS usable: make sensible, specific assumptions and list each one in assumptions (max 3, short, second person, e.g. "You coach home workouts for beginners"). If the input is detailed, assumptions can be empty.
+- Otherwise "usable". Thin input (one word like "fitness", or only a picked niche) IS usable: make sensible, specific assumptions and list each one in assumptions (max 3, short, second person, e.g. "You coach home workouts for beginners"). If the input is detailed, assumptions can be empty.
 
 STEP 2 - PRODUCTS (2 to 4, usually 3)
 - Ground every product in what the creator actually said. Never invent credentials, qualifications, follower counts, student numbers, testimonials or results.

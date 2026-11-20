@@ -21,12 +21,16 @@ Built for the SuperProfile PM take-home assignment.
   - Empty input, an invalid handle or keyboard-mash text is caught before any AI call.
   - The model can also mark input "unusable" (gibberish, or a disallowed offer such as guaranteed returns). Either way, the creator gets a short follow-up question, not an error.
   - Thin input ("fitness") still produces a store, with the AI's assumptions shown so the creator can correct them.
-- **Instagram:** not scraped (blocked and against platform terms). The handle is used only as a hint, and the model must say when it relied on it.
+- **Instagram:** never read or scraped (unreliable and against platform terms). A handle the creator types is only shown as a link and used for the "Get it" DM button. A handle on its own isn't enough to build a store, so the creator is asked for one line about what they do.
 - **Prompt injection:** the creator's text is passed as quoted data, and the model is told to ignore instructions inside it.
+
+## Abuse and cost protection
+
+The AI endpoints are rate-limited per IP (30 store builds and 90 part regenerations per hour), counted in Redis. If Redis is unavailable, requests are allowed and the monthly spend cap on the Gemini project is the backstop.
 
 ## Storage
 
-Published stores are saved in Upstash Redis (free tier) under a short link. If Redis isn't configured, publishing still works: the whole store is compressed into a self-contained `/p?d=...` link.
+Published stores are saved in Upstash Redis (free tier) under a short link with a 6-character random suffix. A new link is created only if it's free (atomic create), so one store can never overwrite another. Updates need the private edit key: a random 128-bit key kept in the creator's browser, with only its SHA-256 hash stored on the server. If Redis isn't configured, publishing still works: the whole store is compressed into a self-contained `/p?d=...` link.
 
 ## Run locally
 
@@ -36,8 +40,15 @@ Requires Node.js 20+.
 npm install
 cp .env.example .env.local   # then add your GEMINI_API_KEY
 npm run dev                  # http://localhost:3000
-npm test                     # guardrail unit tests
+npm test                     # 16 tests: guardrails + AI failure paths
 ```
+
+## Tests
+
+`npm test` runs offline:
+
+- `tests/guardrails.test.ts`: price ranges, gibberish detection, handle validation, link format, duplicate products, unsupported-claim warnings.
+- `tests/llm.test.ts`: the AI chain with a scripted fake network. It covers a malformed answer retried with feedback, Gemini overloaded → Groq, Gemini timing out → Groq, Gemini rate-limited and Groq down → Flash-Lite, a retired Groq model replaced automatically, a missing key, and everything down → a friendly error.
 
 ## Environment variables
 
@@ -76,4 +87,4 @@ tests/                       Unit tests
 
 ## Built with AI tools
 
-Built with Claude as the AI coding assistant. I defined the scope, flow, pricing rules and edge cases, then reviewed and tested the generated code. That testing included a local simulated AI to check the retry, fallback and timeout paths, plus phone-sized browser runs.
+Built with Claude as the AI coding assistant. I made the product decisions and directed Claude, which wrote the code. I verified each change by testing on real phones, reading the server logs, running the automated tests above, and three rounds of independent QA by a separate Claude agent.

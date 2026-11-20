@@ -230,8 +230,11 @@ export async function generateStructured<T>(opts: {
   parse: (raw: unknown) => T;
   temperature?: number;
   totalBudgetMs?: number;
+  /** Per-call timeout. Only overridden in tests, to simulate a slow provider quickly. */
+  callTimeoutMs?: number;
 }): Promise<{ data: T; model: string; attempts: number }> {
   const chain = buildChain();
+  const minRemaining = opts.callTimeoutMs ? Math.min(4_000, opts.callTimeoutMs / 4) : 4_000;
   const budget = opts.totalBudgetMs ?? 45_000;
   const start = Date.now();
   let lastError: LLMError | null = null;
@@ -246,7 +249,7 @@ export async function generateStructured<T>(opts: {
 
     for (let tryNo = 0; tryNo < 3; tryNo++) {
       const remaining = budget - (Date.now() - start);
-      if (remaining < 4_000) break;
+      if (remaining < minRemaining) break;
       attempts++;
       const label = `${target.provider}:${target.model}`;
       try {
@@ -255,7 +258,7 @@ export async function generateStructured<T>(opts: {
           system: opts.system,
           user: opts.user + feedback,
           schema: opts.schema,
-          timeoutMs: Math.min(isLast ? 20_000 : 15_000, remaining),
+          timeoutMs: Math.min(opts.callTimeoutMs ?? (isLast ? 20_000 : 15_000), remaining),
           temperature: opts.temperature ?? 0.8,
         };
         const raw = target.provider === "groq" ? await callGroq(callOpts) : await callGemini(callOpts);
@@ -271,7 +274,7 @@ export async function generateStructured<T>(opts: {
         }
         if (isLast && lastError.kind === "overloaded" && !usedPauseRetry && budget - (Date.now() - start) > 10_000) {
           usedPauseRetry = true;
-          await new Promise((r) => setTimeout(r, 2_000));
+          await new Promise((r) => setTimeout(r, opts.callTimeoutMs ? 10 : 2_000));
           continue;
         }
         break; // next provider/model

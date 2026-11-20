@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { normalizeHandle, slugify } from "@/lib/guardrails";
-import { encodeStore, getRecord, hasDatabase, hashKey, saveRecord } from "@/lib/storage";
+import { createRecord, encodeStore, getRecord, hasDatabase, hashKey, saveRecord } from "@/lib/storage";
 import { StoreSchema } from "@/lib/types";
 
 const RequestSchema = z.object({
@@ -56,10 +56,16 @@ export async function POST(req: Request) {
         return NextResponse.json({ status: "ok", mode: "db", path: `/s/${existingSlug}`, slug: existingSlug, editKey: existingKey });
       }
     }
-    const slug = slugify(store.name);
     const editKey = randomBytes(16).toString("hex");
-    await saveRecord(slug, { store, editKeyHash: hashKey(editKey), createdAt: now, updatedAt: now });
-    return NextResponse.json({ status: "ok", mode: "db", path: `/s/${slug}`, slug, editKey });
+    const record = { store, editKeyHash: hashKey(editKey), createdAt: now, updatedAt: now };
+    // New link: create only if free, so an existing store can never be overwritten.
+    for (let tries = 0; tries < 5; tries++) {
+      const slug = slugify(store.name);
+      if (await createRecord(slug, record)) {
+        return NextResponse.json({ status: "ok", mode: "db", path: `/s/${slug}`, slug, editKey });
+      }
+    }
+    throw new Error("Could not find a free link after 5 tries");
   } catch (err) {
     console.error("[publish] database failed, falling back to link", err);
     return NextResponse.json({ status: "ok", mode: "link", path: `/p?d=${encodeStore(store)}` });
