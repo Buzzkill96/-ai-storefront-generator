@@ -25,7 +25,7 @@ const EXAMPLES: { label: string; input: CreatorInput }[] = [
   {
     label: "Fitness coach",
     input: {
-      name: "Priya Sharma", handle: "fitwithpriya", niche: "Fitness", audience: "5k_25k", language: "english",
+      name: "Priya Sharma", handle: "", niche: "Fitness", audience: "5k_25k", language: "english",
       description: "Certified trainer and mom of two. I post 15-minute home workouts for busy moms who can't make it to a gym.",
     },
   },
