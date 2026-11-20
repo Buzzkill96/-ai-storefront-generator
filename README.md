@@ -14,7 +14,7 @@ Built for the SuperProfile PM take-home assignment.
 
 - **Model:** Google Gemini (`gemini-3.8-flash`, with `gemini-3.5-flash-lite` as fallback; set by environment variables so a retired model can be swapped without a code change), called with a strict JSON response schema (`lib/prompts.ts`).
 - **Validation:** every response is checked with Zod (`lib/types.ts`, `lib/build-store.ts`). Missing fields, fewer than 2 products, or an empty bio count as failures.
-- **Retries:** if validation fails, the same model retries once with feedback about what was wrong. If the model is briefly overloaded (503), it pauses 1.5 s and retries. A timeout (25 s), rate limit or retired model moves on to the next fallback model. If that fails too, the creator sees a friendly message and keeps their input (`lib/llm.ts`).
+- **Retries:** if validation fails, the same model retries once with feedback about what was wrong. If the model is briefly overloaded (503), it retries up to twice with growing pauses (2 s, 4 s). A timeout (25 s), rate limit or retired model moves on to the next fallback model. If that fails too, the creator sees a friendly message and keeps their input (`lib/llm.ts`).
 - **Guardrails in code** (`lib/guardrails.ts`): prices are clamped to a sane INR range per format and snapped to familiar price points (₹199, ₹499, ₹999…), duplicate products are dropped, and text is trimmed.
 - **Messy input:**
   - Empty input, an invalid handle or keyboard-mash text is caught before any AI call.
