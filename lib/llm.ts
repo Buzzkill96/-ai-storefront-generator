@@ -2,11 +2,13 @@
 //
 // Reliability plan for every AI request:
 //   1. Primary model, with a strict JSON schema and a per-call timeout.
-//   2. If the answer fails validation, retry once on the same model, telling it what was wrong.
-//   3. If that fails, times out or hits a rate limit, switch to a lighter fallback model.
+//   2. If the answer fails validation, or the model is briefly overloaded (503), retry the same model
+//      once after a short pause (with feedback on what was wrong, for bad answers).
+//   3. A timeout, rate limit, retired model or second failure moves on to the next fallback model.
+//      GEMINI_FALLBACK_MODEL can list several models, separated by commas.
 //   4. If everything fails, the API route returns a friendly error and the creator keeps their input.
 
-export type LLMErrorKind = "no_key" | "timeout" | "rate_limit" | "http" | "bad_output" | "blocked";
+export type LLMErrorKind = "no_key" | "timeout" | "rate_limit" | "overloaded" | "http" | "bad_output" | "blocked";
 
 export class LLMError extends Error {
   kind: LLMErrorKind;
@@ -57,6 +59,10 @@ async function callGemini(opts: {
     });
 
     if (res.status === 429) throw new LLMError("rate_limit", `Rate limited on ${opts.model}`);
+    if (res.status >= 500) {
+      const body = await res.text().catch(() => "");
+      throw new LLMError("overloaded", `Gemini ${res.status} on ${opts.model}: ${body.slice(0, 200)}`);
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new LLMError("http", `Gemini ${res.status} on ${opts.model}: ${body.slice(0, 300)}`);
@@ -95,13 +101,12 @@ export async function generateStructured<T>(opts: {
   temperature?: number;
   totalBudgetMs?: number;
 }): Promise<{ data: T; model: string; attempts: number }> {
-  const primary = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-  const fallback = process.env.GEMINI_FALLBACK_MODEL || "gemini-2.5-flash-lite";
-  const plan: { model: string; isRetry: boolean }[] = [
-    { model: primary, isRetry: false },
-    { model: primary, isRetry: true },
-    { model: fallback, isRetry: false },
-  ];
+  const primary = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  const fallbacks = (process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  const models = [primary, ...fallbacks.filter((m) => m !== primary)];
 
   const budget = opts.totalBudgetMs ?? 50_000;
   const start = Date.now();
@@ -109,29 +114,34 @@ export async function generateStructured<T>(opts: {
   let feedback = "";
   let attempts = 0;
 
-  for (const step of plan) {
-    if (lastError?.kind === "no_key") break;
-    // Only retry the same model when its answer was bad. A timeout or rate limit goes straight to the fallback.
-    if (step.isRetry && lastError && lastError.kind !== "bad_output") continue;
-    const remaining = budget - (Date.now() - start);
-    if (remaining < 4_000) break;
-
-    attempts++;
-    try {
-      const raw = await callGemini({
-        model: step.model,
-        system: opts.system,
-        user: opts.user + feedback,
-        schema: opts.schema,
-        timeoutMs: Math.min(25_000, remaining),
-        temperature: opts.temperature ?? 0.8,
-      });
-      return { data: opts.parse(raw), model: step.model, attempts };
-    } catch (err) {
-      lastError = err instanceof LLMError ? err : new LLMError("bad_output", (err as Error).message);
-      console.error(`[llm] attempt ${attempts} (${step.model}) failed: ${lastError.kind} - ${lastError.message}`);
-      if (lastError.kind === "bad_output") {
-        feedback = `\n\nIMPORTANT: your previous answer was rejected because: ${lastError.message}. Return valid JSON that follows every rule.`;
+  outer: for (const model of models) {
+    for (let tryNo = 0; tryNo < 2; tryNo++) {
+      const remaining = budget - (Date.now() - start);
+      if (remaining < 4_000) break outer;
+      attempts++;
+      try {
+        const raw = await callGemini({
+          model,
+          system: opts.system,
+          user: opts.user + feedback,
+          schema: opts.schema,
+          timeoutMs: Math.min(25_000, remaining),
+          temperature: opts.temperature ?? 0.8,
+        });
+        return { data: opts.parse(raw), model, attempts };
+      } catch (err) {
+        lastError = err instanceof LLMError ? err : new LLMError("bad_output", (err as Error).message);
+        console.error(`[llm] attempt ${attempts} (${model}) failed: ${lastError.kind} - ${lastError.message}`);
+        if (lastError.kind === "no_key") break outer;
+        if (lastError.kind === "bad_output") {
+          feedback = `\n\nIMPORTANT: your previous answer was rejected because: ${lastError.message}. Return valid JSON that follows every rule.`;
+          continue; // retry same model with feedback
+        }
+        if (lastError.kind === "overloaded" && tryNo === 0) {
+          await new Promise((r) => setTimeout(r, 1_500)); // brief pause, then retry same model
+          continue;
+        }
+        break; // timeout, rate limit, retired model, or second failure: next model
       }
     }
   }
@@ -145,6 +155,7 @@ export function friendlyMessage(err: unknown): string {
     case "no_key":
       return "The AI isn't connected yet (missing API key). Please contact the site owner.";
     case "rate_limit":
+    case "overloaded":
       return "Lots of creators are building right now. Please try again in a minute — your details are saved.";
     case "timeout":
       return "The AI is taking longer than usual. Please try again — your details are saved.";
