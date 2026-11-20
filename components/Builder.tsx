@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { formatINR, normalizeHandle } from "@/lib/guardrails";
+import { findUnsupportedClaims, formatINR, normalizeHandle } from "@/lib/guardrails";
 import {
   AUDIENCES,
   AUDIENCE_LABELS,
@@ -201,6 +201,7 @@ export default function Builder() {
   }, [step]);
 
   const handleCheck = normalizeHandle(input.handle);
+  const claimWarnings = store ? findUnsupportedClaims(store, `${input.description} ${input.niche} ${input.name}`) : [];
   const canGenerate = input.description.trim().length >= 2 || (!!handleCheck.handle && handleCheck.valid);
 
   // ----- Actions -----
@@ -451,6 +452,13 @@ export default function Builder() {
             </div>
           ) : (
             <>
+              {claimWarnings.length > 0 && (
+                <div className="notice error" role="status">
+                  <strong>Check before publishing.</strong> Your store mentions things you didn&apos;t tell us:{" "}
+                  {claimWarnings.join(", ")}. Edit them out unless they&apos;re true for you.
+                </div>
+              )}
+
               {assumptions.length > 0 && (
                 <div className="notice">
                   <strong>We filled in some gaps.</strong> Edit anything that isn&apos;t right:
@@ -679,7 +687,7 @@ export default function Builder() {
       {!handleCheck.valid ? (
         <div className="err">Instagram handles only use letters, numbers, dots and underscores.</div>
       ) : (
-        <div className="hint">We don&apos;t read your Instagram. Your own words above matter more.</div>
+        <div className="hint">We don&apos;t read your Instagram; it&apos;s only shown as a link on your page.</div>
       )}
 
       <div className="label" id="lang-label">Language for your page</div>

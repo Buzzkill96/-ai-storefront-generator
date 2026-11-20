@@ -24,12 +24,13 @@ export async function POST(req: Request) {
   const { handle, valid: handleValid } = normalizeHandle(input.handle);
   const description = input.description.trim();
 
-  // 1) Nothing usable at all
-  if (!description && (!handle || !handleValid)) {
+  // 1) Nothing to build from. We never read Instagram, so a handle alone isn't enough:
+  //    ask for one line instead of guessing who the creator is. A picked niche is enough to start.
+  if (!description && !input.niche) {
     return reply({
       status: "needs_more_info",
-      reason: handle && !handleValid
-        ? "That doesn't look like an Instagram handle. Tell us in one line what you post about instead."
+      reason: handle
+        ? "We don't read Instagram profiles, so tell us in one line what you post about or teach."
         : "Tell us in one line what you post about or teach.",
     });
   }

@@ -102,3 +102,31 @@ export function slugify(name: string): string {
   const suffix = Math.random().toString(36).slice(2, 6);
   return `${base || "store"}-${suffix}`;
 }
+
+// ---- Unsupported claims ----
+
+/**
+ * Words that make a claim a creator must stand behind (health, safety, credentials, guarantees).
+ * If the store uses one that the creator never wrote, we warn them before publishing.
+ * The AI is told not to do this; this check catches it when it slips.
+ */
+const CLAIM_PATTERNS: { label: string; re: RegExp }[] = [
+  { label: "postpartum / pregnancy", re: /post[\s-]?partum|post[\s-]?pregnan|pregnan|prenatal|new moms?/i },
+  { label: "safe", re: /\bsafe(ly)?\b/i },
+  { label: "pain relief", re: /\bpain\b/i },
+  { label: "posture correction", re: /posture/i },
+  { label: "injury or rehab", re: /injur|rehab/i },
+  { label: "therapy or healing", re: /therap|\bheal|\bcure/i },
+  { label: "medical conditions", re: /medical|clinical|diabet|pcos|pcod|thyroid|blood pressure/i },
+  { label: "weight-loss results", re: /lose\s+\d+|\d+\s?kg|weight[\s-]?loss/i },
+  { label: "certified / qualified", re: /certified|certificat|qualified|licensed/i },
+  { label: "guaranteed results", re: /guarantee|100%|assured/i },
+];
+
+export function findUnsupportedClaims(
+  store: { tagline: string; bio: string; products: { title: string; description: string; priceReason?: string }[] },
+  creatorText: string,
+): string[] {
+  const output = [store.tagline, store.bio, ...store.products.flatMap((p) => [p.title, p.description, p.priceReason ?? ""])].join(" \n ");
+  return CLAIM_PATTERNS.filter(({ re }) => re.test(output) && !re.test(creatorText)).map(({ label }) => label);
+}
