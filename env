@@ -1,0 +1,16 @@
+# Required: free key from https://aistudio.google.com (Get API key)
+GEMINI_API_KEY=
+
+# Optional: model names (defaults shown)
+GEMINI_MODEL=gemini-3.8-flash
+GEMINI_FALLBACK_MODEL=gemini-3.5-flash-lite
+
+# Recommended: second AI provider as backup. Free key from https://console.groq.com (no card)
+GROQ_API_KEY=
+GROQ_MODEL=openai/gpt-oss-120b
+
+# Optional: Upstash Redis for short share links (/s/your-name).
+# On Vercel these are added automatically when you connect Upstash from the Storage tab.
+# Without them, published pages still work using a longer self-contained link (/p?d=...).
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
