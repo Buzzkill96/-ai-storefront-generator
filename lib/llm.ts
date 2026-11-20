@@ -1,12 +1,15 @@
-// Talks to Google Gemini and returns validated, structured JSON.
+// Gets validated, structured JSON from an AI model, across more than one provider.
 //
-// Reliability plan for every AI request:
-//   1. Primary model, with a strict JSON schema and a per-call timeout.
-//   2. If the answer fails validation, or the model is briefly overloaded (503), retry the same model
-//      once after a short pause (with feedback on what was wrong, for bad answers).
-//   3. A timeout, rate limit, retired model or second failure moves on to the next fallback model.
-//      GEMINI_FALLBACK_MODEL can list several models, separated by commas.
-//   4. If everything fails, the API route returns a friendly error and the creator keeps their input.
+// Reliability plan for every AI request (the "chain"):
+//   1. Google Gemini (GEMINI_MODEL), with a strict JSON schema and minimal "thinking" for speed.
+//   2. Groq (GROQ_MODEL), a separate provider, if GROQ_API_KEY is set. If Google is overloaded,
+//      the next attempt doesn't depend on Google recovering.
+//   3. Gemini fallback model(s) (GEMINI_FALLBACK_MODEL, comma-separated).
+// Within each step:
+//   - An answer that fails validation is retried once on the same model, with feedback on what was wrong.
+//   - Overloaded / timeout / rate limit / retired model: move straight to the next step (fast),
+//     except on the last step, which gets one more try after a short pause.
+// If everything fails, the API route returns a friendly error and the creator keeps their input.
 
 export type LLMErrorKind = "no_key" | "timeout" | "rate_limit" | "overloaded" | "http" | "bad_output" | "blocked";
 
@@ -19,77 +22,166 @@ export class LLMError extends Error {
 }
 
 type GeminiSchema = Record<string, unknown>;
+type Target = { provider: "gemini" | "groq"; model: string };
+type CallOpts = { model: string; system: string; user: string; schema: GeminiSchema; timeoutMs: number; temperature: number };
 
-// GEMINI_BASE_URL is only overridden in local tests (to simulate slow or broken AI answers).
-const ENDPOINT = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/models";
+// GEMINI_BASE_URL / GROQ_BASE_URL are only overridden in local tests (to simulate slow or broken AI answers).
+const GEMINI_ENDPOINT = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/models";
+const GROQ_ENDPOINT = process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1";
 
-async function callGemini(opts: {
-  model: string;
-  system: string;
-  user: string;
-  schema: GeminiSchema;
-  timeoutMs: number;
-  temperature: number;
-}): Promise<unknown> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new LLMError("no_key", "GEMINI_API_KEY is not set");
+// Remembers models that rejected the thinking setting, so we stop sending it to them.
+const noThinkingSupport = new Set<string>();
 
+async function postJSON(url: string, headers: Record<string, string>, body: unknown, timeoutMs: number, label: string) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
-
-  const generationConfig: Record<string, unknown> = {
-    responseMimeType: "application/json",
-    responseSchema: opts.schema,
-    temperature: opts.temperature,
-    maxOutputTokens: 4096,
-  };
-  // Gemini 2.5 Flash "thinks" by default, which adds seconds. Copywriting doesn't need it.
-  if (/^gemini-2\.5-flash/.test(opts.model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
-
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${ENDPOINT}/${opts.model}:generateContent`, {
+    const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: opts.system }] },
-        contents: [{ role: "user", parts: [{ text: opts.user }] }],
-        generationConfig,
-      }),
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
-
-    if (res.status === 429) throw new LLMError("rate_limit", `Rate limited on ${opts.model}`);
-    if (res.status >= 500) {
-      const body = await res.text().catch(() => "");
-      throw new LLMError("overloaded", `Gemini ${res.status} on ${opts.model}: ${body.slice(0, 200)}`);
-    }
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new LLMError("http", `Gemini ${res.status} on ${opts.model}: ${body.slice(0, 300)}`);
-    }
-
-    const json = (await res.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
-      promptFeedback?: unknown;
-    };
-    const candidate = json.candidates?.[0];
-    if (!candidate) throw new LLMError("blocked", `No answer: ${JSON.stringify(json.promptFeedback ?? {})}`);
-    const text = candidate.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-    if (!text) throw new LLMError("bad_output", `Empty answer (finishReason: ${candidate.finishReason})`);
-
+    const text = await res.text().catch(() => "");
+    if (res.status === 429) throw new LLMError("rate_limit", `Rate limited on ${label}`);
+    if (res.status >= 500) throw new LLMError("overloaded", `${label} ${res.status}: ${text.slice(0, 200)}`);
+    if (!res.ok) throw new LLMError("http", `${label} ${res.status}: ${text.slice(0, 300)}`);
     try {
-      return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+      return JSON.parse(text);
     } catch {
-      throw new LLMError("bad_output", "The answer was not valid JSON");
+      throw new LLMError("bad_output", `${label} sent a non-JSON reply`);
     }
   } catch (err) {
     if (err instanceof LLMError) throw err;
-    if ((err as Error).name === "AbortError") throw new LLMError("timeout", `${opts.model} took longer than ${opts.timeoutMs}ms`);
+    if ((err as Error).name === "AbortError") throw new LLMError("timeout", `${label} took longer than ${timeoutMs}ms`);
     const cause = (err as { cause?: unknown }).cause;
     throw new LLMError("http", `${String(err)}${cause ? ` (cause: ${String((cause as Error).message ?? cause)})` : ""}`);
   } finally {
     clearTimeout(timer);
   }
+}
+
+function parseModelJSON(text: string): unknown {
+  try {
+    return JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
+  } catch {
+    throw new LLMError("bad_output", "The answer was not valid JSON");
+  }
+}
+
+// ---------- Google Gemini ----------
+
+function thinkingConfigFor(model: string): Record<string, unknown> | undefined {
+  if (noThinkingSupport.has(model)) return undefined;
+  if (/^gemini-2\.5-flash/.test(model)) return { thinkingBudget: 0 };
+  if (/^gemini-3/.test(model)) return { thinkingLevel: /flash/.test(model) ? "minimal" : "low" };
+  return undefined;
+}
+
+async function callGemini(o: CallOpts): Promise<unknown> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new LLMError("no_key", "GEMINI_API_KEY is not set");
+
+  const isGemini3 = /^gemini-3/.test(o.model);
+  const generationConfig: Record<string, unknown> = {
+    responseMimeType: "application/json",
+    responseSchema: o.schema,
+    maxOutputTokens: 4096,
+    // Google recommends keeping Gemini 3 at its default temperature (1.0); lower values can cause loops.
+    temperature: isGemini3 ? 1 : o.temperature,
+  };
+  const thinking = thinkingConfigFor(o.model);
+  if (thinking) generationConfig.thinkingConfig = thinking;
+
+  const send = () =>
+    postJSON(
+      `${GEMINI_ENDPOINT}/${o.model}:generateContent`,
+      { "x-goog-api-key": key },
+      {
+        systemInstruction: { parts: [{ text: o.system }] },
+        contents: [{ role: "user", parts: [{ text: o.user }] }],
+        generationConfig,
+      },
+      o.timeoutMs,
+      `Gemini ${o.model}`,
+    );
+
+  let json: { candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[]; promptFeedback?: unknown };
+  try {
+    json = await send();
+  } catch (err) {
+    // If this model doesn't accept the thinking setting, drop it and try once more.
+    if (err instanceof LLMError && err.kind === "http" && thinking && /thinking/i.test(err.message)) {
+      noThinkingSupport.add(o.model);
+      delete generationConfig.thinkingConfig;
+      json = await send();
+    } else {
+      throw err;
+    }
+  }
+
+  const candidate = json.candidates?.[0];
+  if (!candidate) throw new LLMError("blocked", `No answer: ${JSON.stringify(json.promptFeedback ?? {})}`);
+  const text = candidate.content?.parts?.filter((p) => !p.thought).map((p) => p.text ?? "").join("") ?? "";
+  if (!text) throw new LLMError("bad_output", `Empty answer (finishReason: ${candidate.finishReason})`);
+  return parseModelJSON(text);
+}
+
+// ---------- Groq (OpenAI-compatible) ----------
+
+/** Gemini's schema format uses upper-case types; standard JSON Schema uses lower-case. */
+function toJsonSchema(s: unknown): unknown {
+  if (Array.isArray(s)) return s.map(toJsonSchema);
+  if (s && typeof s === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(s as Record<string, unknown>)) {
+      if (k === "propertyOrdering") continue;
+      out[k] = k === "type" && typeof v === "string" ? v.toLowerCase() : toJsonSchema(v);
+    }
+    return out;
+  }
+  return s;
+}
+
+async function callGroq(o: CallOpts): Promise<unknown> {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) throw new LLMError("no_key", "GROQ_API_KEY is not set");
+  const json = (await postJSON(
+    `${GROQ_ENDPOINT}/chat/completions`,
+    { Authorization: `Bearer ${key}` },
+    {
+      model: o.model,
+      messages: [
+        {
+          role: "system",
+          content: `${o.system}\n\nRespond with ONLY a JSON object that matches this JSON Schema exactly (all required fields, no extra text):\n${JSON.stringify(toJsonSchema(o.schema))}`,
+        },
+        { role: "user", content: o.user },
+      ],
+      response_format: { type: "json_object" },
+      temperature: o.temperature,
+      max_tokens: 3000,
+    },
+    o.timeoutMs,
+    `Groq ${o.model}`,
+  )) as { choices?: { message?: { content?: string } }[] };
+  const text = json.choices?.[0]?.message?.content ?? "";
+  if (!text) throw new LLMError("bad_output", "Empty answer from Groq");
+  return parseModelJSON(text);
+}
+
+// ---------- The chain ----------
+
+function buildChain(): Target[] {
+  const primary = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  const fallbacks = (process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite")
+    .split(",")
+    .map((m) => m.trim())
+    .filter((m) => m && m !== primary);
+  const chain: Target[] = [{ provider: "gemini", model: primary }];
+  if (process.env.GROQ_API_KEY) chain.push({ provider: "groq", model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile" });
+  for (const m of fallbacks) chain.push({ provider: "gemini", model: m });
+  return chain;
 }
 
 export async function generateStructured<T>(opts: {
@@ -101,52 +193,50 @@ export async function generateStructured<T>(opts: {
   temperature?: number;
   totalBudgetMs?: number;
 }): Promise<{ data: T; model: string; attempts: number }> {
-  const primary = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-  const fallbacks = (process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite")
-    .split(",")
-    .map((m) => m.trim())
-    .filter(Boolean);
-  const models = [primary, ...fallbacks.filter((m) => m !== primary)];
-
-  const budget = opts.totalBudgetMs ?? 50_000;
+  const chain = buildChain();
+  const budget = opts.totalBudgetMs ?? 45_000;
   const start = Date.now();
   let lastError: LLMError | null = null;
-  let feedback = "";
   let attempts = 0;
 
-  outer: for (const model of models) {
+  for (let i = 0; i < chain.length; i++) {
+    const target = chain[i];
+    const isLast = i === chain.length - 1;
+    let feedback = "";
     let usedFeedbackRetry = false;
-    // Up to 3 calls per model: overload spikes usually clear within a few seconds.
+    let usedPauseRetry = false;
+
     for (let tryNo = 0; tryNo < 3; tryNo++) {
       const remaining = budget - (Date.now() - start);
-      if (remaining < 4_000) break outer;
+      if (remaining < 4_000) break;
       attempts++;
+      const label = `${target.provider}:${target.model}`;
       try {
-        const raw = await callGemini({
-          model,
+        const callOpts: CallOpts = {
+          model: target.model,
           system: opts.system,
           user: opts.user + feedback,
           schema: opts.schema,
-          timeoutMs: Math.min(25_000, remaining),
+          timeoutMs: Math.min(isLast ? 20_000 : 15_000, remaining),
           temperature: opts.temperature ?? 0.8,
-        });
-        return { data: opts.parse(raw), model, attempts };
+        };
+        const raw = target.provider === "groq" ? await callGroq(callOpts) : await callGemini(callOpts);
+        return { data: opts.parse(raw), model: label, attempts };
       } catch (err) {
         lastError = err instanceof LLMError ? err : new LLMError("bad_output", (err as Error).message);
-        console.error(`[llm] attempt ${attempts} (${model}) failed: ${lastError.kind} - ${lastError.message}`);
-        if (lastError.kind === "no_key") break outer;
+        console.error(`[llm] attempt ${attempts} (${label}) failed: ${lastError.kind} - ${lastError.message}`);
+        if (lastError.kind === "no_key") break; // try the next provider
         if (lastError.kind === "bad_output" && !usedFeedbackRetry) {
           usedFeedbackRetry = true;
           feedback = `\n\nIMPORTANT: your previous answer was rejected because: ${lastError.message}. Return valid JSON that follows every rule.`;
-          continue; // retry same model with feedback
-        }
-        if (lastError.kind === "overloaded" && tryNo < 2) {
-          const wait = (tryNo + 1) * 2_000; // 2s, then 4s
-          if (budget - (Date.now() - start) < wait + 6_000) break;
-          await new Promise((r) => setTimeout(r, wait));
           continue;
         }
-        break; // timeout, rate limit, retired model, or repeated failure: next model
+        if (isLast && lastError.kind === "overloaded" && !usedPauseRetry && budget - (Date.now() - start) > 10_000) {
+          usedPauseRetry = true;
+          await new Promise((r) => setTimeout(r, 2_000));
+          continue;
+        }
+        break; // next provider/model
       }
     }
   }
@@ -161,9 +251,8 @@ export function friendlyMessage(err: unknown): string {
       return "The AI isn't connected yet (missing API key). Please contact the site owner.";
     case "rate_limit":
     case "overloaded":
-      return "Lots of creators are building right now. Please try again in a minute — your details are saved.";
     case "timeout":
-      return "The AI is taking longer than usual. Please try again — your details are saved.";
+      return "Lots of creators are building right now. Please try again in a minute — your details are saved.";
     case "blocked":
       return "We couldn't create a store from that description. Try describing your skills a little differently.";
     default:
