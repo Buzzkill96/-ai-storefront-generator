@@ -302,9 +302,17 @@ export default function Builder() {
     window.scrollTo(0, 0);
   }
 
-  /** keepDetails: go back to the form with the creator's details filled in (to tweak and retry). */
-  function startOver(keepDetails: boolean) {
-    if (!keepDetails) setInput(EMPTY_INPUT);
+  /** Back to the form. The current store and its published link are kept, so nothing is lost. */
+  function backToForm() {
+    setError("");
+    setPublishErrors([]);
+    setStep("input");
+    window.scrollTo(0, 0);
+  }
+
+  /** Clear everything for a different creator. */
+  function startNewStore() {
+    setInput(EMPTY_INPUT);
     setStore(null);
     setAssumptions([]);
     setPublished(null);
@@ -408,7 +416,7 @@ export default function Builder() {
           </a>
           <a className="btn secondary block" href={published.url} target="_blank" rel="noopener noreferrer">Open my store</a>
           <button className="btn secondary block" onClick={() => setStep("edit")}>Keep editing</button>
-          <button className="btn link" onClick={() => startOver(false)}>Start a new store</button>
+          <button className="btn link" onClick={startNewStore}>Start a new store</button>
         </div>
       </div>
     );
@@ -419,7 +427,7 @@ export default function Builder() {
       <>
         <div className="topbar">
           <div className="inner">
-            <button className="btn link" onClick={() => startOver(true)} style={{ whiteSpace: "nowrap" }}>← Back</button>
+            <button className="btn link" onClick={backToForm} style={{ whiteSpace: "nowrap" }}>← Back</button>
             <div className="seg" role="group" aria-label="Edit or preview">
               <button className={tab === "edit" ? "on" : ""} aria-pressed={tab === "edit"} onClick={() => setTab("edit")}>Edit</button>
               <button className={tab === "preview" ? "on" : ""} aria-pressed={tab === "preview"} onClick={() => setTab("preview")}>Preview</button>
@@ -598,6 +606,18 @@ export default function Builder() {
       <p className="sub">Tell us what you do. We&apos;ll suggest what to sell, how to price it in ₹, and write your page. You can edit everything.</p>
 
       {error && <div className="notice error" style={{ marginBottom: 8 }}>{error}</div>}
+
+      {store && (
+        <div className="card" style={{ marginTop: 0, marginBottom: 6 }}>
+          <div style={{ fontWeight: 650 }}>Your store “{store.name}” is saved{published ? " and live" : ""}.</div>
+          <div className="hint" style={{ marginTop: 4 }}>
+            Building again creates fresh ideas and replaces this draft{published ? " — your published link stays the same" : ""}.
+          </div>
+          <button className="btn secondary block" style={{ marginTop: 10 }} onClick={() => { setStep("edit"); setTab("edit"); window.scrollTo(0, 0); }}>
+            Continue editing your store →
+          </button>
+        </div>
+      )}
 
       <label className="label" htmlFor="desc">What do you do, and who do you help?</label>
       <textarea

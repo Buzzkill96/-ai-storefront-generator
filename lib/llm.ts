@@ -143,9 +143,47 @@ function toJsonSchema(s: unknown): unknown {
   return s;
 }
 
+// Groq retires models without much notice. If the configured one is gone, ask Groq which models
+// exist and pick the best available one from this preference list (cached per server instance).
+const GROQ_PREFERENCES = [/gpt-oss-120b/, /llama-4-maverick/, /llama-4-scout/, /qwen/, /gpt-oss-20b/, /llama.*70b/];
+let groqDiscoveredModel: string | null = null;
+
+async function discoverGroqModel(key: string, exclude: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${GROQ_ENDPOINT}/models`, { headers: { Authorization: `Bearer ${key}` } });
+    if (!res.ok) return null;
+    const ids = ((await res.json()) as { data?: { id: string }[] }).data?.map((m) => m.id) ?? [];
+    const usable = ids.filter((id) => id !== exclude && !/whisper|guard|tts|embed|vision|compound/i.test(id));
+    for (const pref of GROQ_PREFERENCES) {
+      const hit = usable.find((id) => pref.test(id));
+      if (hit) return hit;
+    }
+    return usable[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function callGroq(o: CallOpts): Promise<unknown> {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new LLMError("no_key", "GROQ_API_KEY is not set");
+  const model = groqDiscoveredModel ?? o.model;
+  try {
+    return await callGroqModel({ ...o, model }, key);
+  } catch (err) {
+    if (err instanceof LLMError && err.kind === "http" && /model_not_found|does not exist|decommissioned/i.test(err.message)) {
+      const replacement = await discoverGroqModel(key, model);
+      if (replacement) {
+        console.error(`[llm] Groq model "${model}" is unavailable; switching to "${replacement}". Set GROQ_MODEL=${replacement} to make this permanent.`);
+        groqDiscoveredModel = replacement;
+        return await callGroqModel({ ...o, model: replacement }, key);
+      }
+    }
+    throw err;
+  }
+}
+
+async function callGroqModel(o: CallOpts, key: string): Promise<unknown> {
   const json = (await postJSON(
     `${GROQ_ENDPOINT}/chat/completions`,
     { Authorization: `Bearer ${key}` },
@@ -179,7 +217,7 @@ function buildChain(): Target[] {
     .map((m) => m.trim())
     .filter((m) => m && m !== primary);
   const chain: Target[] = [{ provider: "gemini", model: primary }];
-  if (process.env.GROQ_API_KEY) chain.push({ provider: "groq", model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile" });
+  if (process.env.GROQ_API_KEY) chain.push({ provider: "groq", model: process.env.GROQ_MODEL || "openai/gpt-oss-120b" });
   for (const m of fallbacks) chain.push({ provider: "gemini", model: m });
   return chain;
 }
